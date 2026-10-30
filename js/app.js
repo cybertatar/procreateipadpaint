@@ -1,6 +1,6 @@
 import {
-  loadImage, makeCanvas, imageToPixels, posterize, boundaryMask, placeRect,
-  renderLineLayer, renderColorLayer, renderImageLayer, renderSvgLayer,
+  loadImage, makeCanvas, imageToPixels, posterize, traceRegions, colorSvg, lineSvg,
+  placeRect, renderImageLayer, renderSvgLayer,
 } from './lineart.js';
 import { buildPsd, buildSwatches, deliver, hexToRgb, rgbToHex, safeName } from './export.js';
 import { listMine, getMine, putMine, deleteMine } from './store.js';
@@ -166,7 +166,8 @@ function openEditor() {
   $('#btn-delete').hidden = !(photo && cur.id);
   $('#btn-save').textContent = photo && cur.id ? 'Сохранить изменения' : 'Сохранить в «Мои»';
   $('#title').value = cur.name;
-  $$('#layer-toggles input').forEach((i) => (i.checked = false));
+  $('[data-layer="color"]').checked = true;
+  $('[data-layer="orig"]').checked = false;
   setStatus('');
   show('editor');
   syncOutputs();
@@ -222,7 +223,7 @@ function invalidate() {
 }));
 $('#canvas-size').onchange = invalidate;
 $$('#layer-toggles input').forEach((i) => (i.onchange = renderPreview));
-$('#inc-color').onchange = resetPsd;
+$('#inc-blank').onchange = resetPsd;
 $('#inc-orig').onchange = resetPsd;
 $('#title').oninput = () => { cur.name = $('#title').value; resetPsd(); };
 
@@ -233,27 +234,44 @@ const nextFrame = () => new Promise((r) => {
   requestAnimationFrame(() => setTimeout(() => { clearTimeout(t); r(); }, 0));
 });
 
-function ensurePoster() {
+function ensureTrace() {
   const key = ['colors', 'smooth', 'cleanup'].map((id) => $('#' + id).value).join('|');
   if (cur.posterKey !== key) {
+    const smooth = Number($('#smooth').value);
     cur.poster = posterize(cur.px, {
-      colors: Number($('#colors').value), smooth: Number($('#smooth').value), cleanup: Number($('#cleanup').value),
+      colors: Number($('#colors').value), smooth, cleanup: Number($('#cleanup').value),
     });
-    cur.mask = boundaryMask(cur.poster.labels, cur.poster.w, cur.poster.h);
+    cur.trace = traceRegions(cur.poster, smooth);
     cur.posterKey = key;
   }
-  return cur.poster;
+  return cur.trace;
 }
 
-function svgStrokeScale(W, H, px) {
-  const rect = placeRect(cur.vw, cur.vh, W, H);
-  return px / (SVG_BASE_STROKE * rect.w / cur.vw);
+// толщина px на холсте W×H → единицы viewBox рисунка шириной vw
+function strokeUnits(vw, vh, W, H, px) {
+  return px / (placeRect(vw, vh, W, H).w / vw);
 }
 
 async function lineLayer(W, H, px) {
-  if (cur.kind === 'catalog') return renderSvgLayer(cur.svgText, W, H, svgStrokeScale(W, H, px));
-  const p = ensurePoster();
-  return renderLineLayer(cur.mask, p.w, p.h, W, H, px);
+  if (cur.kind === 'catalog') return renderSvgLayer(cur.svgText, W, H, strokeUnits(cur.vw, cur.vh, W, H, px) / SVG_BASE_STROKE);
+  const t = ensureTrace();
+  return renderSvgLayer(lineSvg(t, strokeUnits(t.w, t.h, W, H, px)), W, H);
+}
+
+async function colorLayer(W, H) {
+  return renderSvgLayer(colorSvg(ensureTrace()), W, H);
+}
+
+// векторный контур для отдельного скачивания
+function contourSvgText() {
+  const [W, H] = canvasDims();
+  const px = thickPx(W, H);
+  if (cur.kind === 'catalog') {
+    const s = strokeUnits(cur.vw, cur.vh, W, H, px) / SVG_BASE_STROKE;
+    return cur.svgText.replace(/stroke-width="([\d.]+)"/g, (_, v) => `stroke-width="${+(v * s).toFixed(2)}"`);
+  }
+  const t = ensureTrace();
+  return lineSvg(t, +strokeUnits(t.w, t.h, W, H, px).toFixed(2));
 }
 
 async function renderPreview() {
@@ -267,19 +285,18 @@ async function renderPreview() {
     const s = Math.min(1, PREVIEW_SIDE / Math.max(W, H));
     const pw = Math.round(W * s), ph = Math.round(H * s);
     const lines = await lineLayer(pw, ph, thickPx(W, H) * s);
+    const color = it.kind === 'photo' && $('[data-layer="color"]').checked ? await colorLayer(pw, ph) : null;
     if (seq !== renderSeq || it !== cur) return;
     const c = $('#preview');
     c.width = pw; c.height = ph;
     const ctx = c.getContext('2d');
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, pw, ph);
-    if (it.kind === 'photo') {
-      if ($('[data-layer="orig"]').checked) {
-        ctx.globalAlpha = 0.45;
-        ctx.drawImage(renderImageLayer(it.img, it.px.w, it.px.h, pw, ph), 0, 0);
-        ctx.globalAlpha = 1;
-      }
-      if ($('[data-layer="color"]').checked) ctx.drawImage(renderColorLayer(it.poster, pw, ph), 0, 0);
+    if (color) ctx.drawImage(color, 0, 0);
+    if (it.kind === 'photo' && $('[data-layer="orig"]').checked) {
+      ctx.globalAlpha = 0.45;
+      ctx.drawImage(renderImageLayer(it.img, it.px.w, it.px.h, pw, ph), 0, 0);
+      ctx.globalAlpha = 1;
     }
     ctx.drawImage(lines, 0, 0);
     renderPalette();
@@ -317,9 +334,11 @@ async function preparePsd() {
   const layers = [{ name: 'Фон', canvas: bg }];
   if (it.kind === 'photo') {
     if ($('#inc-orig').checked) layers.push({ name: 'Оригинал', canvas: renderImageLayer(it.img, it.px.w, it.px.h, W, H), hidden: true });
-    if ($('#inc-color').checked) layers.push({ name: 'Цветовая карта', canvas: renderColorLayer(it.poster, W, H), hidden: true });
+    layers.push({ name: 'Цвет', canvas: await colorLayer(W, H) });
+    if ($('#inc-blank').checked) layers.push({ name: 'Раскраска', canvas: makeCanvas(W, H) });
+  } else {
+    layers.push({ name: 'Цвет', canvas: makeCanvas(W, H) });
   }
-  layers.push({ name: 'Цвет', canvas: makeCanvas(W, H) });
   layers.push({ name: 'Контур', canvas: lines });
   return buildPsd(W, H, layers);
 }
@@ -358,6 +377,16 @@ $('#btn-swatches').onclick = async () => {
   if (!window.fflate) return setStatus('Библиотека ещё загружается, попробуйте через пару секунд.', true);
   const how = await deliver(buildSwatches(cur.name, pal), safeName(cur.name) + '.swatches');
   if (how === 'downloaded') setStatus('Палитра сохранена. Откройте файл .swatches, Procreate добавит её во вкладку «Палитры».');
+};
+
+$('#btn-svg').onclick = async () => {
+  try {
+    const blob = new Blob([contourSvgText()], { type: 'image/svg+xml' });
+    const how = await deliver(blob, safeName(cur.name) + '-kontur.svg');
+    if (how === 'downloaded') setStatus('Векторный контур сохранён в SVG.');
+  } catch (e) {
+    setStatus('Не удалось сохранить SVG: ' + (e.message || e), true);
+  }
 };
 
 $('#btn-save').onclick = async () => {

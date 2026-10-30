@@ -11,13 +11,14 @@
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/ag-psd@31.0.2/dist/bundle.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/imagetracerjs@1.2.6/imagetracer_v1.2.6.js" defer></script>
   <script type="module" src="js/app.js"></script>
 </head>
 <body>
   <main id="home" class="view">
     <header class="masthead">
       <h1>Раскраски<br>для Procreate</h1>
-      <p class="lede">Выберите картинку или превратите своё фото в контур. На выходе PSD со слоями «Контур», «Цвет», «Фон» и палитра.</p>
+      <p class="lede">Выберите картинку или разложите своё фото на два слоя: цветные области и векторный контур. На выходе PSD для Procreate, контур в SVG и палитра.</p>
     </header>
 
     <label class="upload">
@@ -49,7 +50,7 @@
     </div>
 
     <div class="layers" id="layer-toggles">
-      <label><input type="checkbox" data-layer="color"> Цветовая карта</label>
+      <label><input type="checkbox" data-layer="color" checked> Слой «Цвет»</label>
       <label><input type="checkbox" data-layer="orig"> Оригинал</label>
     </div>
 
@@ -61,7 +62,7 @@
       </div>
       <div class="ctl photo-only">
         <label for="smooth">Сглаживание <output data-for="smooth"></output></label>
-        <input id="smooth" type="range" min="0" max="5" value="2">
+        <input id="smooth" type="range" min="0" max="5" value="3">
       </div>
       <div class="ctl photo-only">
         <label for="cleanup">Убрать мелкие детали <output data-for="cleanup"></output></label>
@@ -81,7 +82,7 @@
         </select>
       </div>
       <div class="ctl photo-only checks">
-        <label><input id="inc-color" type="checkbox" checked> Цветовая карта скрытым слоем</label>
+        <label><input id="inc-blank" type="checkbox" checked> Пустой слой «Раскраска» над цветом</label>
         <label><input id="inc-orig" type="checkbox"> Оригинал скрытым слоем</label>
       </div>
     </section>
@@ -94,6 +95,7 @@
     <section class="actions">
       <button id="btn-psd" class="primary">Подготовить PSD для Procreate</button>
       <button id="btn-swatches" class="secondary">Скачать палитру .swatches</button>
+      <button id="btn-svg" class="secondary">Векторный контур .svg</button>
       <button id="btn-save" class="secondary photo-only">Сохранить в «Мои»</button>
       <button id="btn-delete" class="danger photo-only" hidden>Удалить из «Мои»</button>
       <p id="status" class="status" role="status"></p>
@@ -103,8 +105,8 @@
       <summary>Как открыть в Procreate</summary>
       <ol>
         <li>Нажмите «Открыть в Procreate» и выберите Procreate в меню «Поделиться». Если меню не появилось, файл сохранится в «Файлы»: откройте его оттуда или перетащите в галерею Procreate.</li>
-        <li>Слои: «Контур» сверху, «Цвет» для раскрашивания, «Фон» снизу.</li>
-        <li>У слоя «Контур» включите «Референс», затем на слое «Цвет» перетаскивайте цвет в области: заливка остановится на линиях.</li>
+        <li>Слои сверху вниз: «Контур» (векторные линии), «Раскраска» (пустой), «Цвет» (области, залитые цветами фото), «Фон». Слой «Цвет» можно скрыть и раскрашивать с нуля или оставить как подсказку.</li>
+        <li>У слоя «Контур» включите «Референс», затем на слое «Раскраска» перетаскивайте цвет в области: заливка остановится на линиях.</li>
         <li>Палитру .swatches откройте тем же способом, она появится во вкладке «Палитры».</li>
       </ol>
     </details>
