@@ -1,0 +1,180 @@
+{
+  "items": [
+    {
+      "id": "cat",
+      "name": "Кот",
+      "tag": "животные",
+      "file": "cat.svg",
+      "palette": [
+        "#e8a65d",
+        "#c97b3c",
+        "#f6e6cf",
+        "#7a4a2a",
+        "#f2b8a2",
+        "#5b8c6b",
+        "#2f3b46",
+        "#fdf3e1"
+      ]
+    },
+    {
+      "id": "fish",
+      "name": "Рыбка",
+      "tag": "море",
+      "file": "fish.svg",
+      "palette": [
+        "#f28c38",
+        "#f5c04a",
+        "#2d7fa6",
+        "#8fc7d9",
+        "#3f8f5a",
+        "#e05a3a",
+        "#fbe8c4",
+        "#1f3d57"
+      ]
+    },
+    {
+      "id": "mushroom",
+      "name": "Грибной домик",
+      "tag": "сказка",
+      "file": "mushroom.svg",
+      "palette": [
+        "#c8392b",
+        "#fbf1dc",
+        "#d9b38c",
+        "#6b4a32",
+        "#4f8a3c",
+        "#f3c94f",
+        "#8bbbd6",
+        "#2b2b2b"
+      ]
+    },
+    {
+      "id": "butterfly",
+      "name": "Бабочка",
+      "tag": "насекомые",
+      "file": "butterfly.svg",
+      "palette": [
+        "#2d6fb7",
+        "#f2a33a",
+        "#e0533d",
+        "#f6d55c",
+        "#3a2e2a",
+        "#8cc084",
+        "#f9eedb",
+        "#7b4fa0"
+      ]
+    },
+    {
+      "id": "flower",
+      "name": "Цветок в горшке",
+      "tag": "растения",
+      "file": "flower.svg",
+      "palette": [
+        "#f2c230",
+        "#e8752a",
+        "#7a4a2a",
+        "#4f8f45",
+        "#9ccf7a",
+        "#c5553a",
+        "#efe2c8",
+        "#3a6ea5"
+      ]
+    },
+    {
+      "id": "owl",
+      "name": "Сова",
+      "tag": "птицы",
+      "file": "owl.svg",
+      "palette": [
+        "#8a5a3b",
+        "#c99a6b",
+        "#f1dfc0",
+        "#f2b134",
+        "#3b2a20",
+        "#6f8f4e",
+        "#e5cfa8",
+        "#2c3e50"
+      ]
+    },
+    {
+      "id": "whale",
+      "name": "Кит",
+      "tag": "море",
+      "file": "whale.svg",
+      "palette": [
+        "#3b6e9e",
+        "#9cc3dd",
+        "#f5efe0",
+        "#1f3550",
+        "#6fb3c9",
+        "#f2c45a",
+        "#e88d7a",
+        "#2c5f73"
+      ]
+    },
+    {
+      "id": "cactus",
+      "name": "Кактус",
+      "tag": "растения",
+      "file": "cactus.svg",
+      "palette": [
+        "#4f8a4a",
+        "#8fbf6a",
+        "#e86a8a",
+        "#f4c2cf",
+        "#c46a3a",
+        "#e8b07a",
+        "#f6ead3",
+        "#2f4f3a"
+      ]
+    },
+    {
+      "id": "mandala-1",
+      "name": "Мандала 1",
+      "tag": "узоры",
+      "file": "mandala-1.svg",
+      "palette": [
+        "#1f4e79",
+        "#3f8fb7",
+        "#9fd0e0",
+        "#f2c14e",
+        "#e0703a",
+        "#a63d40",
+        "#f7ecd9",
+        "#2b2b2b"
+      ]
+    },
+    {
+      "id": "mandala-2",
+      "name": "Мандала 2",
+      "tag": "узоры",
+      "file": "mandala-2.svg",
+      "palette": [
+        "#6a2c70",
+        "#b83b5e",
+        "#f08a5d",
+        "#f9ed69",
+        "#3a7d44",
+        "#9bc53d",
+        "#fdf6e3",
+        "#1d3557"
+      ]
+    },
+    {
+      "id": "mandala-3",
+      "name": "Мандала 3",
+      "tag": "узоры",
+      "file": "mandala-3.svg",
+      "palette": [
+        "#264653",
+        "#2a9d8f",
+        "#e9c46a",
+        "#f4a261",
+        "#e76f51",
+        "#8ab17d",
+        "#f1ead8",
+        "#3d2c2e"
+      ]
+    }
+  ]
+}

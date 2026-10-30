@@ -1,1 +1,40 @@
 # procreateipadpaint
+
+Telegram Mini App: библиотека раскрасок и превращение фото в раскраску для Procreate на iPad.
+
+- **Каталог** — готовые раскраски (SVG в `catalog/`).
+- **Из фото** — фото упрощается до N цветов, границы областей становятся контуром. Области замкнутые, поэтому в Procreate работает заливка.
+- **Экспорт** — PSD со слоями `Фон` / `Цвет` / `Контур` (+ скрытые `Цветовая карта` и `Оригинал`), Procreate открывает его со слоями. Плюс палитра `.swatches`.
+- **Мои** — сохранённые раскраски из фото, хранятся на устройстве (IndexedDB).
+
+Всё работает в браузере, сервер не нужен.
+
+## Запуск
+
+```bash
+python3 -m http.server 8765
+```
+
+Откройте http://localhost:8765.
+
+## Публикация
+
+1. GitHub → Settings → Pages → Source: *Deploy from a branch*, ветка `main`, папка `/ (root)`.
+2. Адрес будет `https://cybertatar.github.io/procreateipadpaint/`.
+3. В @BotFather: `/newbot` (если бота ещё нет), затем `/newapp` или *Bot Settings → Menu Button*, указать этот адрес.
+
+## Как добавить раскраску в каталог
+
+1. Положите SVG в `catalog/`. Требования: есть `viewBox`, линии чёрные (`stroke`), без заливки, основная толщина `stroke-width="4"` (ползунок толщины масштабирует все `stroke-width`). Контуры должны быть замкнутыми, чтобы работала заливка.
+2. Добавьте запись в `catalog/catalog.json`:
+
+```json
+{ "id": "fox", "name": "Лиса", "tag": "животные", "file": "fox.svg", "palette": ["#e07a3a", "#fbf1dc"] }
+```
+
+## Структура
+
+- `js/lineart.js` — фото → области → контур, рендер слоёв
+- `js/export.js` — PSD (ag-psd), `.swatches` (zip со `Swatches.json`), отдача файла через меню «Поделиться»
+- `js/store.js` — личная библиотека в IndexedDB
+- `js/app.js` — интерфейс и интеграция с Telegram WebApp
