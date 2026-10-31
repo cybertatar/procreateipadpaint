@@ -1,5 +1,5 @@
 import {
-  loadImage, makeCanvas, imageToPixels, posterize, traceRegions, colorSvg, lineSvg,
+  loadImage, makeCanvas, imageToPixels, cropToSubject, posterize, traceRegions, colorSvg, lineSvg,
   placeRect, renderImageLayer, renderSvgLayer,
 } from './lineart.js';
 import { buildPsd, buildSwatches, deliver, hexToRgb, rgbToHex, safeName } from './export.js';
@@ -19,6 +19,8 @@ const SIZES = {
 const PROCESS_SIDE = 1000;   // разрешение, на котором ищем области
 const PREVIEW_SIDE = 1100;   // разрешение превью
 const SVG_BASE_STROKE = 4;   // основная толщина линий в SVG каталога
+const COMPLEX_EDGES = 90;    // столько линий контура на настройках по умолчанию = «сложное фото»
+const BG_LIB = 'https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.7.0/+esm';
 
 let catalog = [];
 let tab = 'catalog';
@@ -128,7 +130,7 @@ $('#file').onchange = async (e) => {
   if (!f) return;
   try {
     const img = await loadImage(URL.createObjectURL(f));
-    openPhoto({ name: f.name.replace(/\.[^.]+$/, '') || 'Моя раскраска', img, id: null });
+    openPhoto({ name: f.name.replace(/\.[^.]+$/, '') || 'Моя раскраска', img, blob: f, id: null });
   } catch (err) {
     toast('Не удалось открыть файл. Попробуйте JPG или PNG.');
   }
@@ -149,14 +151,113 @@ async function openMine(id) {
   const it = await getMine(id);
   if (!it) return toast('Раскраска не найдена');
   const img = await loadImage(URL.createObjectURL(it.photo));
-  openPhoto({ name: it.name, img, id: it.id, settings: it.settings });
+  openPhoto({ name: it.name, img, blob: it.photo, cutBlob: it.cutout, id: it.id, settings: it.settings });
 }
 
-function openPhoto({ name, img, id, settings }) {
+function openPhoto({ name, img, blob, cutBlob, id, settings }) {
   const px = imageToPixels(img, PROCESS_SIDE);
-  cur = { kind: 'photo', name, img, px, aspect: px.w / px.h, id, poster: null, posterKey: '' };
-  if (settings) for (const [k, v] of Object.entries(settings)) { const el = $('#' + k); if (el) el.value = v; }
+  cur = {
+    kind: 'photo', name, img, blob, cutBlob, id, basePx: px, cut: null,
+    aspect: px.w / px.h, poster: null, posterKey: '',
+    autoCheck: !settings, // для нового фото сами решаем, нужно ли убрать фон
+  };
+  $('#remove-bg').checked = false;
+  if (settings) {
+    for (const [k, v] of Object.entries(settings)) {
+      const el = $('#' + k);
+      if (el) el.type === 'checkbox' ? (el.checked = !!v) : (el.value = v);
+    }
+  }
   openEditor();
+}
+
+/* ---------- Удаление фона ---------- */
+let bgLib = null;
+
+// Файлы модели (~90 МБ) кэшируем сами в Cache Storage: их сервер не отдаёт
+// заголовков кэширования, и без этого модель скачивалась бы при каждом запуске
+const MODEL_HOST = 'https://staticimgly.com/';
+const MODEL_CACHE = 'bg-model-1.7.0';
+const nativeFetch = window.fetch.bind(window);
+window.fetch = async (input, init) => {
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input?.url;
+  if (!url?.startsWith(MODEL_HOST) || !('caches' in window)) return nativeFetch(input, init);
+  try {
+    const cache = await caches.open(MODEL_CACHE);
+    const hit = await cache.match(url);
+    if (hit) return hit;
+    const res = await nativeFetch(input, init);
+    if (res.ok) await cache.put(url, res.clone());
+    return res;
+  } catch {
+    return nativeFetch(input, init);
+  }
+};
+
+// превью может запросить вырезку несколько раз подряд — считаем её один раз
+function ensureCutout() {
+  const it = cur;
+  it.cutPromise ??= makeCutout(it).catch((e) => { it.cutPromise = null; throw e; });
+  return it.cutPromise;
+}
+
+async function makeCutout(it) {
+  let cutImg;
+  if (it.cutBlob) {
+    cutImg = await loadImage(URL.createObjectURL(it.cutBlob));
+  } else {
+    setBusy(true, 'Загружаю модуль удаления фона');
+    bgLib ??= await import(BG_LIB);
+    const run = () => bgLib.removeBackground(it.blob, {
+      model: 'isnet_fp16', // isnet_quint8 легче, но на сложном фоне режет объект на куски
+      output: { format: 'image/png' },
+      progress: (key, done, total) => {
+        if (key.startsWith('fetch:') && total) setBusy(true, `Загружаю модель фона ${Math.round((done / total) * 100)}% (один раз)`);
+        else if (key.startsWith('compute:')) setBusy(true, 'Убираю фон');
+      },
+    });
+    let out;
+    try {
+      out = await run();
+    } catch (e) {
+      out = await run(); // одна повторная попытка: загрузка модели иногда обрывается
+    }
+    it.cutBlob = out;
+    cutImg = await loadImage(URL.createObjectURL(out));
+  }
+  const res = cropToSubject(imageToPixels(cutImg, PROCESS_SIDE, true));
+  if (!res) throw new Error('Не нашёл объект на фото');
+  it.cut = res;
+  return res;
+}
+
+// пиксели, с которыми работаем сейчас: всё фото или вырезанный объект
+async function currentPx() {
+  if (cur.kind !== 'photo') return null;
+  if ($('#remove-bg').checked) {
+    try {
+      await ensureCutout();
+    } catch (e) {
+      console.error(e);
+      $('#remove-bg').checked = false;
+      const msg = e.message === 'Failed to fetch' ? 'нет связи с сервером модели, попробуйте ещё раз' : (e.message || e);
+      setStatus('Не получилось убрать фон: ' + msg, true);
+    }
+  }
+  const px = $('#remove-bg').checked ? cur.cut.px : cur.basePx;
+  cur.px = px;
+  cur.aspect = px.w / px.h;
+  return px;
+}
+
+// оригинал, обрезанный так же, как обрабатываемые пиксели
+function origSource() {
+  const iw = cur.img.naturalWidth, ih = cur.img.naturalHeight;
+  if (!$('#remove-bg').checked || !cur.cut) return { src: cur.img, w: iw, h: ih };
+  const f = cur.cut.frame;
+  const c = makeCanvas(f.w * iw, f.h * ih);
+  c.getContext('2d').drawImage(cur.img, f.x * iw, f.y * ih, c.width, c.height, 0, 0, c.width, c.height);
+  return { src: c, w: c.width, h: c.height };
 }
 
 function openEditor() {
@@ -224,6 +325,7 @@ function invalidate() {
 $('#canvas-size').onchange = invalidate;
 $$('#layer-toggles input').forEach((i) => (i.onchange = renderPreview));
 $('#inc-blank').onchange = resetPsd;
+$('#remove-bg').onchange = invalidate;
 $('#inc-orig').onchange = resetPsd;
 $('#title').oninput = () => { cur.name = $('#title').value; resetPsd(); };
 
@@ -235,7 +337,7 @@ const nextFrame = () => new Promise((r) => {
 });
 
 function ensureTrace() {
-  const key = ['colors', 'smooth', 'cleanup'].map((id) => $('#' + id).value).join('|');
+  const key = ['colors', 'smooth', 'cleanup'].map((id) => $('#' + id).value).join('|') + '|' + $('#remove-bg').checked;
   if (cur.posterKey !== key) {
     const smooth = Number($('#smooth').value);
     cur.poster = posterize(cur.px, {
@@ -281,6 +383,22 @@ async function renderPreview() {
   setBusy(true);
   await nextFrame();
   try {
+    if (it.kind === 'photo') {
+      await currentPx();
+      if (it !== cur) return;
+      if (it.autoCheck) {
+        it.autoCheck = false;
+        if (ensureTrace().edges.length > COMPLEX_EDGES && !$('#remove-bg').checked) {
+          // сложное фото: убираем фон и мелкие детали, чтобы не плодить грязь
+          $('#remove-bg').checked = true;
+          $('#cleanup').value = Math.max(4, Number($('#cleanup').value));
+          syncOutputs();
+          setStatus('Сложное фото: фон и мелкие детали убраны автоматически. Можно вернуть галочкой «Убрать фон».');
+          await currentPx();
+          if (it !== cur || seq !== renderSeq) return;
+        }
+      }
+    }
     const [W, H] = canvasDims();
     const s = Math.min(1, PREVIEW_SIDE / Math.max(W, H));
     const pw = Math.round(W * s), ph = Math.round(H * s);
@@ -295,7 +413,8 @@ async function renderPreview() {
     if (color) ctx.drawImage(color, 0, 0);
     if (it.kind === 'photo' && $('[data-layer="orig"]').checked) {
       ctx.globalAlpha = 0.45;
-      ctx.drawImage(renderImageLayer(it.img, it.px.w, it.px.h, pw, ph), 0, 0);
+      const o = origSource();
+      ctx.drawImage(renderImageLayer(o.src, o.w, o.h, pw, ph), 0, 0);
       ctx.globalAlpha = 1;
     }
     ctx.drawImage(lines, 0, 0);
@@ -333,7 +452,10 @@ async function preparePsd() {
   bctx.fillRect(0, 0, W, H);
   const layers = [{ name: 'Фон', canvas: bg }];
   if (it.kind === 'photo') {
-    if ($('#inc-orig').checked) layers.push({ name: 'Оригинал', canvas: renderImageLayer(it.img, it.px.w, it.px.h, W, H), hidden: true });
+    if ($('#inc-orig').checked) {
+      const o = origSource();
+      layers.push({ name: 'Оригинал', canvas: renderImageLayer(o.src, o.w, o.h, W, H), hidden: true });
+    }
     layers.push({ name: 'Цвет', canvas: await colorLayer(W, H) });
     if ($('#inc-blank').checked) layers.push({ name: 'Раскраска', canvas: makeCanvas(W, H) });
   } else {
@@ -407,7 +529,11 @@ $('#btn-save').onclick = async () => {
       created: Date.now(),
       photo: await toBlob(ph, 0.9),
       thumb: await toBlob(th, 0.85),
-      settings: Object.fromEntries(['colors', 'smooth', 'cleanup', 'thick', 'canvas-size'].map((k) => [k, $('#' + k).value])),
+      cutout: cur.cutBlob || null,
+      settings: {
+        ...Object.fromEntries(['colors', 'smooth', 'cleanup', 'thick', 'canvas-size'].map((k) => [k, $('#' + k).value])),
+        'remove-bg': $('#remove-bg').checked,
+      },
     };
     await putMine(item);
     cur.id = item.id;

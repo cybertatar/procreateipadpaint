@@ -19,16 +19,93 @@ export function makeCanvas(w, h) {
   return c;
 }
 
-export function imageToPixels(img, maxSide) {
+// Пиксели картинки, уменьшенной до maxSide. withAlpha — сохранить прозрачность
+// как маску объекта (для вырезанного фона), RGB при этом кладётся на белый.
+export function imageToPixels(img, maxSide, withAlpha = false) {
   const iw = img.naturalWidth || img.width;
   const ih = img.naturalHeight || img.height;
   const s = Math.min(1, maxSide / Math.max(iw, ih));
   const c = makeCanvas(iw * s, ih * s);
   const ctx = c.getContext('2d', { willReadFrequently: true });
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(0, 0, c.width, c.height);
+  if (!withAlpha) {
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, c.width, c.height);
+  }
   ctx.drawImage(img, 0, 0, c.width, c.height);
-  return { w: c.width, h: c.height, data: ctx.getImageData(0, 0, c.width, c.height).data };
+  const data = ctx.getImageData(0, 0, c.width, c.height).data;
+  const px = { w: c.width, h: c.height, data };
+  if (withAlpha) {
+    const alpha = new Uint8Array(c.width * c.height);
+    for (let i = 0; i < alpha.length; i++) {
+      const a = data[i * 4 + 3];
+      alpha[i] = a;
+      for (let ch = 0; ch < 3; ch++) data[i * 4 + ch] = Math.round((data[i * 4 + ch] * a + 255 * (255 - a)) / 255);
+      data[i * 4 + 3] = 255;
+    }
+    px.alpha = alpha;
+  }
+  return px;
+}
+
+// Чистка маски объекта: убираем островки мусора и заделываем мелкие дырки,
+// чтобы силуэт был цельным. Работает на месте с px.alpha (0 или 255 на выходе).
+function cleanMask(alpha, w, h) {
+  const n = w * h;
+  const m = new Uint8Array(n);
+  for (let i = 0; i < n; i++) m[i] = alpha[i] >= 128 ? 1 : 0;
+  const comp = new Int32Array(n).fill(-1);
+  const stack = new Int32Array(n);
+  const comps = [];
+  for (let start = 0; start < n; start++) {
+    if (comp[start] !== -1) continue;
+    const v = m[start], id = comps.length;
+    let sp = 0, size = 0, border = false;
+    stack[sp++] = start; comp[start] = id;
+    while (sp) {
+      const p = stack[--sp];
+      size++;
+      const x = p % w, y = (p - x) / w;
+      if (x === 0 || y === 0 || x === w - 1 || y === h - 1) border = true;
+      if (x > 0 && comp[p - 1] === -1 && m[p - 1] === v) { comp[p - 1] = id; stack[sp++] = p - 1; }
+      if (x < w - 1 && comp[p + 1] === -1 && m[p + 1] === v) { comp[p + 1] = id; stack[sp++] = p + 1; }
+      if (y > 0 && comp[p - w] === -1 && m[p - w] === v) { comp[p - w] = id; stack[sp++] = p - w; }
+      if (y < h - 1 && comp[p + w] === -1 && m[p + w] === v) { comp[p + w] = id; stack[sp++] = p + w; }
+    }
+    comps.push({ v, size, border });
+  }
+  const biggestFg = Math.max(0, ...comps.filter((c) => c.v).map((c) => c.size));
+  const flip = comps.map((c) => (c.v
+    ? c.size < biggestFg * 0.04            // мелкий кусок объекта отдельно от главного
+    : !c.border && c.size < n * 0.015));   // маленькая дырка внутри объекта
+  for (let i = 0; i < n; i++) alpha[i] = (flip[comp[i]] ? !m[i] : m[i]) ? 255 : 0;
+}
+
+// Обрезка по объекту (непрозрачной части) с небольшим полем.
+// Возвращает новые пиксели и рамку обрезки в долях исходной картинки.
+export function cropToSubject(px, pad = 0.03) {
+  const { w, h, data, alpha } = px;
+  cleanMask(alpha, w, h);
+  let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (alpha[y * w + x] >= 128) {
+        if (x < x0) x0 = x; if (x > x1) x1 = x;
+        if (y < y0) y0 = y; if (y > y1) y1 = y;
+      }
+    }
+  }
+  if (x1 < 0) return null;
+  const p = Math.round(Math.max(w, h) * pad);
+  x0 = Math.max(0, x0 - p); y0 = Math.max(0, y0 - p);
+  x1 = Math.min(w - 1, x1 + p); y1 = Math.min(h - 1, y1 + p);
+  const cw = x1 - x0 + 1, ch = y1 - y0 + 1;
+  const out = { w: cw, h: ch, data: new Uint8ClampedArray(cw * ch * 4), alpha: new Uint8Array(cw * ch) };
+  for (let y = 0; y < ch; y++) {
+    const src = (y + y0) * w + x0;
+    out.data.set(data.subarray(src * 4, (src + cw) * 4), y * cw * 4);
+    out.alpha.set(alpha.subarray(src, src + cw), y * cw);
+  }
+  return { px: out, frame: { x: x0 / w, y: y0 / h, w: cw / w, h: ch / h } };
 }
 
 // Раздельное box-размытие RGB, радиус r
@@ -74,11 +151,12 @@ function toLab(a) {
   return a;
 }
 
-function kmeans(rgb, n, k) {
+// idx — индексы пикселей, которые кластеризуем (без фона)
+function kmeans(rgb, idx, k) {
   // выборка для обучения
-  const step = Math.max(1, Math.floor(n / 25000));
+  const step = Math.max(1, Math.floor(idx.length / 25000));
   const sample = [];
-  for (let i = 0; i < n; i += step) sample.push(i);
+  for (let i = 0; i < idx.length; i += step) sample.push(idx[i]);
   const dist = (i, c) => {
     const dr = rgb[i * 3] - c[0], dg = rgb[i * 3 + 1] - c[1], db = rgb[i * 3 + 2] - c[2];
     return dr * dr + dg * dg + db * db;
@@ -116,8 +194,8 @@ function kmeans(rgb, n, k) {
       if (acc[c * 4 + 3]) centers[c] = [acc[c * 4] / acc[c * 4 + 3], acc[c * 4 + 1] / acc[c * 4 + 3], acc[c * 4 + 2] / acc[c * 4 + 3]];
     }
   }
-  const labels = new Uint8Array(n);
-  for (let i = 0; i < n; i++) labels[i] = nearest(i);
+  const labels = new Uint8Array(rgb.length / 3);
+  for (const i of idx) labels[i] = nearest(i);
   return { labels, centers };
 }
 
@@ -146,7 +224,7 @@ function modeFilter(labels, w, h, K) {
 // Сливаем с самым частым соседом связные области меньше minArea и узкие ленточки
 // (средняя ширина 2·площадь/периметр меньше minWidth): в раскраске они дают
 // двойные линии и не закрашиваются
-function removeSmall(labels, w, h, K, minArea, minWidth) {
+function removeSmall(labels, w, h, K, minArea, minWidth, bg = -1) {
   const n = w * h;
   const comp = new Uint8Array(n);
   const stack = new Int32Array(n);
@@ -172,9 +250,12 @@ function removeSmall(labels, w, h, K, minArea, minWidth) {
       }
     }
     if (!perim) continue;
-    if (size < minArea || (2 * size) / perim < minWidth) {
-      let best = 0;
-      for (let c = 1; c < K; c++) if (nbCount[c] > nbCount[best]) best = c;
+    if (size < minArea || (lab !== bg && (2 * size) / perim < minWidth)) {
+      // часть объекта не отдаём фону, если рядом есть другие части объекта
+      let best = -1;
+      for (let c = 0; c < K; c++) if (c !== bg && nbCount[c] && (best < 0 || nbCount[c] > nbCount[best])) best = c;
+      if (best < 0) best = bg;
+      if (best < 0) continue;
       for (const p of members) labels[p] = best;
       changed = true;
     }
@@ -182,17 +263,26 @@ function removeSmall(labels, w, h, K, minArea, minWidth) {
   return changed;
 }
 
+// px.alpha (если есть) — маска объекта: всё прозрачное становится одной областью «фон»,
+// у которой нет заливки и внутренних линий, остаётся только силуэт объекта.
 export function posterize(px, { colors = 10, smooth = 2, cleanup = 2 } = {}) {
-  const { w, h, data } = px;
+  const { w, h, data, alpha } = px;
   const n = w * h;
   const lab = toLab(blurRGB(data, w, h, Math.round(Math.max(w, h) / 400)));
-  let { labels, centers } = kmeans(lab, n, colors);
-  const K = centers.length;
+  const fg = [];
+  for (let i = 0; i < n; i++) if (!alpha || alpha[i] >= 128) fg.push(i);
+  let { labels, centers } = kmeans(lab, fg.length ? fg : [0], colors);
+  let K = centers.length;
+  let bg = -1;
+  if (alpha) {
+    bg = K++;
+    for (let i = 0; i < n; i++) if (alpha[i] < 128) labels[i] = bg;
+  }
   for (let i = 0; i < smooth * 2; i++) labels = modeFilter(labels, w, h, K);
   if (cleanup > 0) {
     const minArea = Math.round(n * [0, 0.0002, 0.0006, 0.0015, 0.003, 0.006][cleanup]);
     const minWidth = [0, 2, 3, 4, 5, 6][cleanup] * Math.max(w, h) / 1000;
-    for (let i = 0; i < 3 && removeSmall(labels, w, h, K, minArea, minWidth); i++);
+    for (let i = 0; i < 3 && removeSmall(labels, w, h, K, minArea, minWidth, bg); i++);
     if (smooth) labels = modeFilter(labels, w, h, K);
   }
   // цвета палитры: средние по исходному фото, только используемые
@@ -206,14 +296,14 @@ export function posterize(px, { colors = 10, smooth = 2, cleanup = 2 } = {}) {
     const cnt = acc[c * 4 + 3];
     palette.push(cnt ? [acc[c * 4] / cnt, acc[c * 4 + 1] / cnt, acc[c * 4 + 2] / cnt].map(Math.round) : null);
   }
-  const used = palette.map((p, i) => ({ p, i, cnt: acc[i * 4 + 3] })).filter((e) => e.p).sort((a, b) => b.cnt - a.cnt);
-  return { w, h, labels, palette, swatches: used.map((e) => e.p) };
+  const used = palette.map((p, i) => ({ p, i, cnt: acc[i * 4 + 3] })).filter((e) => e.p && e.i !== bg).sort((a, b) => b.cnt - a.cnt);
+  return { w, h, labels, palette, bg, swatches: used.map((e) => e.p) };
 }
 
 // Векторизация: каждая область превращается в замкнутый путь из линий и кривых Безье.
 // smooth 0..5 — чем больше, тем глаже и проще кривые.
 export function traceRegions(poster, smooth = 2) {
-  const { w, h, labels, palette } = poster;
+  const { w, h, labels, palette, bg } = poster;
   // каждой метке — уникальный цвет, чтобы трассировщик разделил области ровно по меткам
   const ids = [];
   palette.forEach((p, i) => { if (p) ids.push(i); });
@@ -241,6 +331,7 @@ export function traceRegions(poster, smooth = 2) {
   };
   const shapes = [];
   td.layers.forEach((layer, k) => {
+    if (ids[k] === bg) return; // фон не заливаем
     const color = palette[ids[k]];
     for (const path of layer) {
       if (path.isholepath) continue;
@@ -250,7 +341,7 @@ export function traceRegions(poster, smooth = 2) {
       shapes.push({ color, outer, holes });
     }
   });
-  return { w, h, shapes, edges: traceEdges(labels, w, h, smooth) };
+  return { w, h, shapes, edges: traceEdges(labels, w, h, smooth, bg) };
 }
 
 const rgb = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
@@ -265,9 +356,10 @@ export function colorSvg(trace) {
 // Каждая граница между двумя соседями — ровно одна линия от развилки до развилки,
 // поэтому линии не двоятся. Линии сглаживаются (концы на развилках закреплены,
 // чтобы линии сходились), упрощаются и выводятся кривыми Безье.
-function traceEdges(labels, w, h, smooth) {
+// bg >= 0: за краем картинки считаем фон, чтобы вокруг вырезанного объекта не было рамки
+function traceEdges(labels, w, h, smooth, bg = -1) {
   const W1 = w + 1;
-  const lab = (x, y) => (x < 0 || y < 0 || x >= w || y >= h ? -1 : labels[y * w + x]);
+  const lab = (x, y) => (x < 0 || y < 0 || x >= w || y >= h ? bg : labels[y * w + x]);
   // H[y*w+x]: отрезок (x,y)–(x+1,y); V[y*W1+x]: отрезок (x,y)–(x,y+1)
   const H = new Uint8Array(w * (h + 1));
   const V = new Uint8Array(W1 * h);

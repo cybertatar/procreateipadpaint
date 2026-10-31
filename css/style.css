@@ -143,6 +143,7 @@ select {
 .prose h1 { font-size: 28px; margin-bottom: 12px; }
 .prose h2 { font-size: 19px; margin: 22px 0 6px; }
 .prose p { color: var(--ink-2); }
+.prose a { color: var(--ink); text-underline-offset: 3px; }
 
 .toast {
   position: fixed; left: 16px; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom));
